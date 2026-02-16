@@ -52,10 +52,10 @@ def clean_kagglehub_cache():
         print(f"Figyelmeztetés: Kaggle cache törlése sikertelen: {e}")
 
 
-def run_export():
+def run_export(engine: str = "polars", workers: int | None = None):
     """Parquet export futtatása."""
     from etl.export_to_parquet import main as export_main
-    export_main()
+    export_main(engine=engine, workers=workers)
 
 
 def main():
@@ -67,6 +67,18 @@ def main():
         "--clean",
         action="store_true",
         help="Törli a Parquet-ot és a Kaggle CSV cache-t, majd nulláról indít",
+    )
+    parser.add_argument(
+        "--engine",
+        choices=["polars", "duckdb"],
+        default="polars",
+        help="Export motor: polars (alap) vagy duckdb",
+    )
+    parser.add_argument(
+        "--workers",
+        type=int,
+        default=None,
+        help="Párhuzamos workerök száma (alap: CPU magok)",
     )
     args = parser.parse_args()
 
@@ -82,7 +94,7 @@ def main():
     print("   Kész.")
 
     print("\n2. Parquet export...")
-    run_export()
+    run_export(engine=args.engine, workers=args.workers)
     print("\n=== ETL kész. ===")
 
 

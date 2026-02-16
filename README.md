@@ -16,7 +16,7 @@ Részvényadatok letöltése a Kaggle-ról és átalakítása Parquet formátumb
    ```
    → Böngészőben: http://localhost:8001
 
-![ETL folyamat](src/img/etl_process.png)
+![ETL folyamat](src/img/extract_result_with_modified.png)
 
 ## Dataset
 
@@ -53,7 +53,8 @@ $env:KAGGLE_API_TOKEN = "KGAT_your_token_here"
 ### 3. Python csomagok
 
 ```bash
-pip install kagglehub pandas pyarrow
+pip install -r requirements.txt
+# vagy: pip install kagglehub polars pyarrow duckdb
 ```
 
 ---
@@ -67,8 +68,24 @@ python -m etl.run_etl
 ```
 
 - Letölti az adatokat a Kaggle-ról (ha még nincs cache-ben)
-- Parquet formátumba exportál (symbol particionálással)
-- Időtartam: ~30 s letöltés (cache) + ~2 perc export
+- Parquet formátumba exportál (Polars + párhuzamosítás)
+
+**ETL results:**
+
+| Step | Duration |
+|------|----------|
+| Kaggle download | ~30 s (1.02 GB CSV) |
+| Parquet export (Polars, 8 workers) | ~25 s (105 files in parallel) |
+| **Total** | **~1 min** |
+
+*(Previously ~2 min for export with Pandas; Polars + parallelization ≈4× faster.)*
+
+**Opciók:**
+```bash
+python -m etl.run_etl --engine polars --workers 8   # Polars, 8 párhuzamos worker (alap)
+python -m etl.run_etl --engine duckdb               # DuckDB SQL motor helyette
+python -m etl.run_etl --clean                        # Törlés + nulláról indítás
+```
 
 **Tisztítás után újraindításhoz:**
 ```bash
@@ -80,7 +97,7 @@ Törli a `data/parquet`-ot és a Kaggle CSV cache-t, majd nulláról letölt és
 
 ```bash
 python etl/download_dataset.py   # Csak letöltés
-python etl/export_to_parquet.py  # Csak Parquet export
+python etl/export_to_parquet.py  # Csak Parquet export (--engine polars|duckdb, --workers N)
 ```
 
 ---
