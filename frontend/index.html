@@ -1,0 +1,290 @@
+<!DOCTYPE html>
+<html lang="hu">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Nifty 50 Stock Data</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <style>
+    * { box-sizing: border-box; }
+    body { font-family: system-ui, sans-serif; max-width: 1200px; margin: 0 auto; padding: 1.5rem; background: #1a1a2e; color: #eee; }
+    h1 { color: #00d9ff; margin-bottom: 0.5rem; }
+    .subtitle { color: #888; font-size: 0.9rem; margin-bottom: 1.5rem; }
+    .controls { display: flex; gap: 1rem; flex-wrap: wrap; margin-bottom: 1.5rem; align-items: flex-end; }
+    .control-group { display: flex; flex-direction: column; gap: 0.25rem; }
+    label { font-size: 0.8rem; color: #aaa; }
+    select, input, button { padding: 0.5rem 1rem; font-size: 1rem; border-radius: 6px; border: 1px solid #333; background: #16213e; color: #eee; }
+    button { cursor: pointer; background: #00d9ff; color: #1a1a2e; border: none; font-weight: 600; }
+    button:hover { background: #00b8d9; }
+    button:disabled { opacity: 0.5; cursor: not-allowed; }
+    .chart-container { position: relative; height: 350px; margin-bottom: 1.5rem; background: #16213e; border-radius: 8px; padding: 1rem; }
+    table { width: 100%; border-collapse: collapse; background: #16213e; border-radius: 8px; overflow: hidden; }
+    th, td { padding: 0.6rem 1rem; text-align: left; border-bottom: 1px solid #333; }
+    th { background: #0f3460; color: #00d9ff; font-weight: 600; }
+    tr:hover { background: #1a2a4a; }
+    .error { color: #ff6b6b; padding: 1rem; background: #2d1f1f; border-radius: 6px; margin-bottom: 1rem; }
+    .loading { color: #00d9ff; }
+    .stats { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 1rem; margin-bottom: 1.5rem; }
+    .stat-card { background: #16213e; padding: 1rem; border-radius: 8px; border-left: 4px solid #00d9ff; display: flex; flex-direction: column; gap: 0.35rem; }
+    .stat-value-sub { font-size: 0.75rem; color: #888; font-weight: 400; }
+    .stat-label { font-size: 0.8rem; color: #888; }
+    .stat-value { font-size: 1.2rem; font-weight: 600; color: #00d9ff; }
+    .pagination { display: flex; align-items: center; gap: 1rem; margin: 1rem 0; flex-wrap: wrap; }
+    .pagination button { padding: 0.4rem 1rem; font-size: 0.9rem; }
+    .pagination span { color: #888; }
+  </style>
+</head>
+<body>
+  <h1>Nifty 50 Stock Data</h1>
+  <p class="subtitle">Adatok a 8000-es portú Data API-ról (port 8001)</p>
+  <p class="subtitle" id="dateRangeHint" style="font-size:0.8rem;margin-top:-0.5rem;"></p>
+
+  <div class="controls">
+    <div class="control-group">
+      <label>Szimbólum</label>
+      <select id="symbol" onchange="onSymbolChange()">
+        <option value="">– betöltés –</option>
+      </select>
+    </div>
+    <div class="control-group">
+      <label>Kezdő dátum</label>
+      <input type="date" id="start">
+    </div>
+    <div class="control-group">
+      <label>Záró dátum</label>
+      <input type="date" id="end">
+    </div>
+    <div class="control-group">
+      <label>Limit</label>
+      <input type="number" id="limit" value="500" min="1" max="2000000" style="width: 140px;" placeholder="1 – 2 000 000">
+    </div>
+    <div class="control-group">
+      <button id="fetchBtn" onclick="fetchData()">Lekérés</button>
+    </div>
+  </div>
+
+  <div id="error"></div>
+  <div id="stats" class="stats"></div>
+  <div class="chart-container">
+    <canvas id="chart"></canvas>
+  </div>
+  <div id="tableWrap"></div>
+
+  <script>
+    const API = '';
+    const PAGE_SIZE = 5000;  // sorok oldalanként – gyors betöltés
+    let chart = null;
+    let pagination = { currentPage: 1, totalRows: 0, totalPages: 1, symbol: '', start: null, end: null };
+
+    function toDateStr(s) {
+      if (!s) return '';
+      const m = String(s).match(/^(\d{4}-\d{2}-\d{2})/);
+      return m ? m[1] : '';
+    }
+
+    function formatDate(d) {
+      if (!d) return '';
+      const s = String(d);
+      const m = s.match(/^(\d{4})-(\d{2})-(\d{2})[T ]?(\d{2})?:?(\d{2})?:?(\d{2})?/);
+      if (!m) return s;
+      const [, y, mo, day, h, mi, sec] = m;
+      if (h !== undefined && h !== '') return `${y}.${mo}.${day} ${h}:${mi || '00'}${sec ? ':' + sec : ''}`;
+      return `${y}.${mo}.${day}`;
+    }
+
+    async function onSymbolChange() {
+      const symbol = document.getElementById('symbol').value;
+      if (!symbol) return;
+      try {
+        const r = await fetch(API + '/api/stocks/' + encodeURIComponent(symbol) + '/stats');
+        if (r.ok) {
+          const stats = await r.json();
+          const maxRows = stats?.row_count ?? 500;
+          document.getElementById('limit').value = Math.min(2000000, Math.max(1, maxRows));
+        }
+      } catch (e) { /* csendben figyelmen kívül */ }
+    }
+
+    async function loadSymbols() {
+      try {
+        const [symRes, rangeRes] = await Promise.all([
+          fetch(API + '/api/symbols'),
+          fetch(API + '/api/date-range')
+        ]);
+        const symData = await symRes.json();
+        const sel = document.getElementById('symbol');
+        sel.innerHTML = '<option value="">– válassz –</option>' +
+          symData.symbols.map(s => `<option value="${s}">${s}</option>`).join('');
+
+        if (rangeRes.ok) {
+          const range = await rangeRes.json();
+          const minD = toDateStr(range.min_date);
+          const maxD = toDateStr(range.max_date);
+          const startEl = document.getElementById('start');
+          const endEl = document.getElementById('end');
+          startEl.min = minD;
+          startEl.max = maxD;
+          endEl.min = minD;
+          endEl.max = maxD;
+          startEl.value = minD;   // alapértelmezett: első dátum
+          endEl.value = maxD;     // alapértelmezett: utolsó dátum
+          document.getElementById('dateRangeHint').textContent =
+            'Lekérdezhető tartomány: ' + minD + ' – ' + maxD;
+        }
+        document.getElementById('error').textContent = '';
+      } catch (e) {
+        document.getElementById('error').innerHTML = `<div class="error">Szimbólumok betöltése sikertelen. A Data API (8000) fut?</div>`;
+      }
+    }
+
+    async function fetchData(page = 1) {
+      const symbol = document.getElementById('symbol').value;
+      if (!symbol) {
+        document.getElementById('error').innerHTML = '<div class="error">Válassz szimbólumot!</div>';
+        return;
+      }
+      document.getElementById('error').textContent = '';
+      document.getElementById('fetchBtn').disabled = true;
+      document.getElementById('fetchBtn').textContent = 'Betöltés...';
+
+      const start = document.getElementById('start').value || undefined;
+      const end = document.getElementById('end').value || undefined;
+      const totalLimit = parseInt(document.getElementById('limit').value, 10) || 500;
+      const offset = (page - 1) * PAGE_SIZE;
+      const limit = Math.min(PAGE_SIZE, totalLimit - offset);
+
+      if (limit <= 0 || offset >= totalLimit) {
+        document.getElementById('fetchBtn').disabled = false;
+        document.getElementById('fetchBtn').textContent = 'Lekérés';
+        return;
+      }
+
+      const params = new URLSearchParams({ limit: Math.max(1, limit), offset });
+      if (start) params.set('start', start);
+      if (end) params.set('end', end);
+
+      try {
+        const statsParams = new URLSearchParams();
+        if (start) statsParams.set('start', start);
+        if (end) statsParams.set('end', end);
+        const statsUrl = '/api/stocks/' + symbol + '/stats' + (statsParams.toString() ? '?' + statsParams : '');
+        const [dataRes, statsRes] = await Promise.all([
+          fetch(API + '/api/stocks/' + symbol + '?' + params),
+          fetch(API + statsUrl)
+        ]);
+        const data = await dataRes.json();
+        const stats = statsRes.ok ? await statsRes.json() : null;
+
+        if (!dataRes.ok) {
+          let msg = 'Hiba';
+          if (typeof data?.detail === 'string') msg = data.detail;
+          else if (Array.isArray(data?.detail)) msg = data.detail.map(x => x?.msg || x?.type || '').filter(Boolean).join('; ') || JSON.stringify(data.detail);
+          else if (data?.detail) msg = JSON.stringify(data.detail);
+          throw new Error(msg);
+        }
+
+        pagination.currentPage = page;
+        pagination.totalRows = Math.min(totalLimit, stats?.row_count ?? totalLimit);
+        pagination.totalPages = Math.max(1, Math.ceil(pagination.totalRows / PAGE_SIZE));
+        pagination.symbol = symbol;
+        pagination.start = start;
+        pagination.end = end;
+
+        renderStats(stats, data);
+        renderChart(data);
+        renderTable(data);
+        document.getElementById('error').textContent = '';
+      } catch (e) {
+        const msg = e?.message ?? (typeof e === 'object' ? JSON.stringify(e) : String(e));
+        document.getElementById('error').innerHTML = `<div class="error">Hiba: ${msg}</div>`;
+      }
+      document.getElementById('fetchBtn').disabled = false;
+      document.getElementById('fetchBtn').textContent = 'Lekérés';
+    }
+
+    function renderPagination() {
+      if (pagination.totalPages <= 1) return;
+      const wrap = document.getElementById('tableWrap');
+      const from = (pagination.currentPage - 1) * PAGE_SIZE + 1;
+      const to = Math.min(pagination.currentPage * PAGE_SIZE, pagination.totalRows);
+      const pag = document.createElement('div');
+      pag.className = 'pagination';
+      pag.innerHTML = `
+        <button onclick="fetchData(1)" ${pagination.currentPage === 1 ? 'disabled' : ''}>« Első</button>
+        <button onclick="fetchData(${pagination.currentPage - 1})" ${pagination.currentPage <= 1 ? 'disabled' : ''}>‹ Előző</button>
+        <span>${from.toLocaleString()} – ${to.toLocaleString()} / ${pagination.totalRows.toLocaleString()}</span>
+        <span>Oldal ${pagination.currentPage} / ${pagination.totalPages}</span>
+        <button onclick="fetchData(${pagination.currentPage + 1})" ${pagination.currentPage >= pagination.totalPages ? 'disabled' : ''}>Következő ›</button>
+        <button onclick="fetchData(${pagination.totalPages})" ${pagination.currentPage === pagination.totalPages ? 'disabled' : ''}>Utolsó »</button>
+      `;
+      wrap.insertBefore(pag, wrap.firstChild);
+    }
+
+    function renderStats(stats, data) {
+      const el = document.getElementById('stats');
+      if (!stats && !data) { el.innerHTML = ''; return; }
+      const limitMin = 1, limitMax = 2000000;
+      const totalRows = stats?.row_count ?? null;
+      const maxQueryable = totalRows != null ? Math.min(limitMax, totalRows) : limitMax;
+      const rowsSub = totalRows != null
+        ? `min: 1, max: ${maxQueryable.toLocaleString()} · összesen: ${totalRows.toLocaleString()}`
+        : `min: 1, max: ${limitMax.toLocaleString()}`;
+      el.innerHTML = `
+        <div class="stat-card"><span class="stat-label">Szimbólum</span><span class="stat-value">${data.symbol}</span></div>
+        <div class="stat-card"><span class="stat-label">Lekért sorok</span><span class="stat-value">${data.count.toLocaleString()}</span><span class="stat-value-sub">${rowsSub}</span></div>
+        ${stats ? `
+        <div class="stat-card"><span class="stat-label">Összes sor (DB)</span><span class="stat-value">${stats.row_count?.toLocaleString() || '–'}</span></div>
+        <div class="stat-card"><span class="stat-label">Ártartomány</span><span class="stat-value">${stats.price_range ? stats.price_range.min + ' – ' + stats.price_range.max : '–'}</span></div>
+        ` : ''}
+      `;
+    }
+
+    function renderChart(data) {
+      const ctx = document.getElementById('chart').getContext('2d');
+      const maxPoints = 800;
+      const raw = data.data;
+      const step = raw.length > maxPoints ? Math.ceil(raw.length / maxPoints) : 1;
+      const sampled = step > 1 ? raw.filter((_, i) => i % step === 0) : raw;
+      const labels = sampled.map(r => formatDate(r.date));
+      const closes = sampled.map(r => r.close);
+
+      if (chart) chart.destroy();
+      chart = new Chart(ctx, {
+        type: 'line',
+        data: {
+          labels,
+          datasets: [{ label: 'Close', data: closes, borderColor: '#00d9ff', backgroundColor: 'rgba(0,217,255,0.1)', fill: true, tension: 0.2 }]
+        },
+        options: {
+          responsive: true,
+          maintainAspectRatio: false,
+          plugins: { legend: { labels: { color: '#eee' } } },
+          scales: {
+            x: { ticks: { color: '#888', maxTicksLimit: 10 } },
+            y: { ticks: { color: '#888' } }
+          }
+        }
+      });
+    }
+
+    function renderTable(data) {
+      const wrap = document.getElementById('tableWrap');
+      wrap.innerHTML = '';
+      if (!data.data.length) { wrap.innerHTML = '<p>Nincs adat.</p>'; return; }
+      const cols = ['date', 'open', 'high', 'low', 'close', 'volume'];
+      const fmt = (c, v) => c === 'date' ? formatDate(v) : (typeof v === 'number' ? v.toLocaleString('hu-HU') : v);
+      const table = document.createElement('table');
+      table.innerHTML = `
+        <thead><tr>${cols.map(c => `<th>${c}</th>`).join('')}</tr></thead>
+        <tbody>
+          ${data.data.map(r => `<tr>${cols.map(c => `<td>${fmt(c, r[c])}</td>`).join('')}</tr>`).join('')}
+        </tbody>
+      `;
+      wrap.appendChild(table);
+      if (pagination.totalPages > 1) renderPagination();
+    }
+
+    loadSymbols();
+  </script>
+</body>
+</html>

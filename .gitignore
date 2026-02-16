@@ -1,0 +1,19 @@
+# Adatok (Parquet, CSV cache)
+data/
+*.parquet
+
+# Python
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+.env
+
+# IDE
+.idea/
+.vscode/
+*.swp
+
+# OS
+.DS_Store
+Thumbs.db
