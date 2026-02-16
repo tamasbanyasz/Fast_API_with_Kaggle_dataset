@@ -169,6 +169,10 @@ python -m uvicorn frontend.main:app --port 8001
 ```
 → http://localhost:8001
 
+Szimbólum választása:
+
+![Szimbólum választás](src/img/selecting.png)
+
 ![API Dashboard](src/img/api_dashboard_8001.png)
 
 Táblázat lapozással (szerveroldali pagination):
